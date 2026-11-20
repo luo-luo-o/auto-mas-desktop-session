@@ -38,3 +38,10 @@
 ```powershell
 uv run --no-sync python -m pytest plugins/desktop_session/tests -q
 ```
+
+## 发布到 PyPI
+
+分支推送和 PR 会构建 wheel、源码包并校验市场元数据。首次发布前，在 PyPI
+为 `auto-mas-desktop-session` 登记 Trusted Publisher，仓库填写
+`luo-luo-o/auto-mas-desktop-session`，工作流填写 `publish.yml`，环境填写 `pypi`。
+配套宿主和 Windows 进程适配可用并完成联调后，推送与发行包版本一致的 `v` 标签触发发布。
