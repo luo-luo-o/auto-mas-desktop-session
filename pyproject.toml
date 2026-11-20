@@ -17,5 +17,10 @@ dependencies = [
     "auto-mas-win-process-adapter>=0.1.1,<1",
 ]
 
+[project.urls]
+Repository = "https://github.com/luo-luo-o/auto-mas-desktop-session"
+Documentation = "https://github.com/luo-luo-o/auto-mas-desktop-session#readme"
+Changelog = "https://github.com/luo-luo-o/auto-mas-desktop-session/blob/main/CHANGELOG.md"
+
 [tool.setuptools.packages.find]
 where = ["src"]
