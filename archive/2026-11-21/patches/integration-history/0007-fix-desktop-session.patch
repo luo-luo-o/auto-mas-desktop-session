@@ -1,0 +1,179 @@
+From 291a9def89c8919f62c9503bf4c59d1b5bd7ce62 Mon Sep 17 00:00:00 2001
+From: luo-luo-o <luo_luo_o@outlook.com>
+Date: Sat, 21 Nov 2026 03:03:01 +0800
+Subject: [PATCH 7/8] =?utf-8?q?fix(desktop-session):=20=E5=85=B3=E9=97=AD?=
+ =?utf-8?q?=E9=A2=84=E8=A7=88=E5=89=8D=E6=98=8E=E7=A1=AE=E7=A1=AE=E8=AE=A4?=
+ =?utf-8?q?=E6=B3=A8=E9=94=80?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+---
+ docs/desktop-session.md                       |  2 +-
+ .../electron/ipc/desktopSessionHandlers.ts    | 12 +++++-----
+ .../services/desktopSessionService.test.ts    | 22 ++++++++++++-------
+ .../services/desktopSessionService.ts         |  7 +++---
+ 4 files changed, 24 insertions(+), 19 deletions(-)
+
+diff --git a/docs/desktop-session.md b/docs/desktop-session.md
+index 744a17fc8..5f9008334 100644
+--- a/docs/desktop-session.md
++++ b/docs/desktop-session.md
+@@ -4,7 +4,7 @@
+ 
+ 在 Windows x64 虚拟机中启动 AUTO-MAS，使用可丢弃的测试配置、测试账号和游戏安装。记录 Windows 版本、测试提交、托管类型和启动方式。展示结果时移除密码、账号名及本机路径。
+ 
+-1. 在「设置 → 桌面分身」选择受支持的 PC 托管或队列并打开预览。确认脚本在分身操作窗口时，主桌面的鼠标和焦点可独立使用。分别验证后台最小化和原生最小化，再从主 MAS 的调度页查看进度并停止任务。
++1. 在「设置 → 桌面分身」选择受支持的 PC 托管或队列并打开预览。确认脚本在分身操作窗口时，主桌面的鼠标和焦点可独立使用。分别验证后台最小化和原生最小化，再从主 MAS 的调度页查看进度并停止任务。在 MAS 新建的空闲分身里手动打开一个应用，点击预览窗口右上角的 ×，确认出现注销提示。取消后确认应用仍在运行。
+ 2. 连接一个已存在的子会话。取消接管时确认原有应用仍在运行。确认接管后选择「仅断开」，确认本次派发的任务已停止、原有应用仍在运行，并验证主桌面按同名或同一路径清理进程时不会关闭它们。另测明确选择注销时的收尾。
+ 3. 让一个会话运行终末地，再从另一个会话对同一安装目录触发更新。确认更新中止，游戏仍在运行。在三月七 PC 客户端模式下验证命令结束后，命令启动的游戏仍可供后续步骤使用。
+ 4. 在允许修改系统设置的测试 VM 中，将远程桌面服务置为停止。确认环境修复成功时服务保留运行。另造一次复查失败，确认服务恢复为停止，启动类型和其余改动一并恢复。
+diff --git a/frontend/electron/ipc/desktopSessionHandlers.ts b/frontend/electron/ipc/desktopSessionHandlers.ts
+index 3d41f84dd..a0ad07a0e 100644
+--- a/frontend/electron/ipc/desktopSessionHandlers.ts
++++ b/frontend/electron/ipc/desktopSessionHandlers.ts
+@@ -102,7 +102,7 @@ export function registerDesktopSession(
+         preview.webContents.send('desktop-session:state', snapshot)
+     },
+     action => {
+-      if (action === 'close') void confirmClose(true)
++      if (action === 'close') void confirmClose()
+       else preview?.minimize()
+     },
+     tasks => {
+@@ -194,7 +194,7 @@ export function registerDesktopSession(
+     if (preview && viewport) service.position(physicalBounds())
+   }
+ 
+-  function confirmClose(manual: boolean): Promise<boolean> {
++  function confirmClose(): Promise<boolean> {
+     if (closeFlight) return closeFlight
+     closeFlight = (async () => {
+       const window = preview
+@@ -202,9 +202,9 @@ export function registerDesktopSession(
+       if (window) prompts.get(window)?.finish('cancel')
+       await service.waitForStart()
+       const owner = window && !window.isDestroyed() ? window : getMainWindow()
+-      let logoff: boolean | undefined
++      let logoff = false
+       try {
+-        const kind = await service.getClosePrompt(manual)
++        const kind = await service.getClosePrompt()
+         if (kind) {
+           if (owner && !owner.isDestroyed()) {
+             if (owner.isMinimized()) owner.restore()
+@@ -269,7 +269,7 @@ export function registerDesktopSession(
+     window.on('ready-to-show', () => window.show())
+     window.on('close', event => {
+       event.preventDefault()
+-      void confirmClose(true)
++      void confirmClose()
+     })
+     window.on('closed', () => {
+       if (preview === window) {
+@@ -433,6 +433,6 @@ export function registerDesktopSession(
+     get active() {
+       return preview !== null || service.active
+     },
+-    closeForAppQuit: () => confirmClose(false),
++    closeForAppQuit: confirmClose,
+   }
+ }
+diff --git a/frontend/electron/services/desktopSessionService.test.ts b/frontend/electron/services/desktopSessionService.test.ts
+index 9b9060d0e..854ccd334 100644
+--- a/frontend/electron/services/desktopSessionService.test.ts
++++ b/frontend/electron/services/desktopSessionService.test.ts
+@@ -13,6 +13,7 @@ const host = vi.hoisted(() => ({
+   command: vi.fn(),
+   connect: vi.fn(),
+   exit: vi.fn(),
++  closeViewer: vi.fn(),
+ }))
+ 
+ vi.mock('../ipc/initializationHandlers', () => ({
+@@ -31,7 +32,7 @@ vi.mock('node:child_process', () => ({
+     host.report.mockImplementation(report)
+     const stdin = new Writable({
+       write(chunk, _encoding, done) {
+-        const { action, approvedRepairs } = JSON.parse(String(chunk))
++        const { action, approvedRepairs, logoff } = JSON.parse(String(chunk))
+         host.command(action)
+         if (action === 'connect') {
+           report(host.connect() ?? { event: 'state', state: 'connected', sessionId: 7 })
+@@ -51,7 +52,10 @@ vi.mock('node:child_process', () => ({
+           })
+           report({ event: 'repair_finished' })
+         }
+-        if (action === 'close') report({ event: 'state', state: 'idle' })
++        if (action === 'close') {
++          host.closeViewer(logoff)
++          report({ event: 'state', state: 'idle' })
++        }
+         if (action === 'shutdown') {
+           stdout.end()
+           stderr.end()
+@@ -317,13 +321,13 @@ it('preserves the session-changed error when the backend rejects dispatch', asyn
+ })
+ 
+ it.each([
+-  { adopted: false, taskState: 'none', expected: undefined },
+-  { adopted: false, taskState: 'finished', expected: undefined },
++  { adopted: false, taskState: 'none', expected: 'close' },
++  { adopted: false, taskState: 'finished', expected: 'close' },
+   { adopted: false, taskState: 'running', expected: 'close' },
+   { adopted: false, taskState: 'unknown', expected: 'close' },
+   { adopted: true, taskState: 'none', expected: 'close-adopted' },
+ ] as const)(
+-  'checks manual close for adopted=$adopted with tasks $taskState',
++  'asks before signing out for adopted=$adopted with tasks $taskState',
+   async ({ adopted, taskState, expected }) => {
+     const root = mkdtempSync(join(tmpdir(), 'mas-desktop-close-policy-'))
+     host.connect.mockReturnValue({ event: 'state', state: 'connected', sessionId: 7, adopted })
+@@ -359,11 +363,13 @@ it.each([
+       )
+       expect(start.code).toBeUndefined()
+       if (taskState === 'unknown') {
+-        await expect(service.getClosePrompt(true)).rejects.toThrow('http_503')
++        await expect(service.getClosePrompt()).rejects.toThrow('http_503')
+       } else {
+-        expect(await service.getClosePrompt(true)).toBe(expected)
+-        expect(await service.getClosePrompt(false)).toBe(adopted ? 'close-adopted' : 'close')
++        expect(await service.getClosePrompt()).toBe(expected)
+       }
++      const logoff = taskState === 'finished'
++      await service.close(logoff ? { logoff: true } : undefined)
++      expect(host.closeViewer).toHaveBeenCalledExactlyOnceWith(logoff)
+     } finally {
+       await service.close()
+       rmSync(root, { recursive: true, force: true })
+diff --git a/frontend/electron/services/desktopSessionService.ts b/frontend/electron/services/desktopSessionService.ts
+index 937c90976..b3c286ecf 100644
+--- a/frontend/electron/services/desktopSessionService.ts
++++ b/frontend/electron/services/desktopSessionService.ts
+@@ -683,7 +683,7 @@ export class DesktopSessionService {
+     return this.stopOperation
+   }
+ 
+-  private async closeViewer({ logoff = !this.adopted }: { logoff?: boolean } = {}): Promise<void> {
++  private async closeViewer({ logoff = false }: { logoff?: boolean } = {}): Promise<void> {
+     const orphanedSessionId = this.orphanedSessionId
+     if (orphanedSessionId !== undefined) await this.ensureHost()
+     if (!this.host) return
+@@ -712,12 +712,11 @@ export class DesktopSessionService {
+     await this.startOperation
+   }
+ 
+-  async getClosePrompt(manual: boolean): Promise<'close' | 'close-adopted' | undefined> {
++  async getClosePrompt(): Promise<'close' | 'close-adopted' | undefined> {
+     if (!this.active) return
+     const { idle } = await this.pauseAdmissions(true)
+     this.patch({ executing: !idle })
+-    if (this.adopted) return 'close-adopted'
+-    if (!manual || !idle) return 'close'
++    return this.adopted ? 'close-adopted' : 'close'
+   }
+ 
+   private async pauseAdmissions(closing: boolean): Promise<{ idle: boolean }> {
+-- 
+2.47.1.windows.2
+

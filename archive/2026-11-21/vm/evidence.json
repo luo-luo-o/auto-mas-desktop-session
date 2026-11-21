@@ -1,0 +1,26 @@
+
+{
+  "environment": "VM-win11",
+  "verified_on": "2026-11-21",
+  "regression": {
+    "tests/core/test_task_tree_dispatch.py": 15,
+    "tests/platform/test_desktop_session_process_scope.py": 21
+  },
+  "native": {
+    "tests/core/test_native_l3_dispatch_vm.py": 2,
+    "main_session_id": 1,
+    "child_session_id": 20,
+    "l2_execution_target": "VM test adapter",
+    "typed_in_child_window": true,
+    "main_foreground_unchanged": true,
+    "stop_confirmed_child_process_exit": true,
+    "mas_task_cancelled": true,
+    "temporary_credential_copy_removed": true,
+    "temporary_child_session_logged_off": true
+  },
+  "not_verified": [
+    "production full L3-L4 task execution in child session",
+    "mouse isolation",
+    "real game run"
+  ]
+}

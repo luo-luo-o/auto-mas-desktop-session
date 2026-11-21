@@ -1,0 +1,224 @@
+From 3de39ee32f42c080b1b1c85e21b1ee0c95bc098b Mon Sep 17 00:00:00 2001
+From: luo-luo-o <luo_luo_o@outlook.com>
+Date: Sat, 21 Nov 2026 03:14:51 +0800
+Subject: [PATCH 8/8] =?utf-8?q?fix(desktop-session):=20=E5=9C=A8=E7=9B=AE?=
+ =?utf-8?q?=E6=A0=87=E4=BC=9A=E8=AF=9D=E6=93=8D=E4=BD=9C=E5=92=8C=E5=85=B3?=
+ =?utf-8?q?=E9=97=AD=E6=B8=B8=E6=88=8F=E7=AA=97=E5=8F=A3?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+---
+ app/utils/common/process/manager.py           | 21 ++++++-
+ app/utils/contracts/window.py                 |  2 +
+ app/utils/unsupported/window.py               |  4 ++
+ .../windows/desktop_session/process_worker.py | 17 ++++--
+ app/utils/windows/window.py                   |  5 ++
+ .../test_desktop_session_process_scope.py     | 57 +++++++++++++++++++
+ 6 files changed, 97 insertions(+), 9 deletions(-)
+
+diff --git a/app/utils/common/process/manager.py b/app/utils/common/process/manager.py
+index 48817e5e5..c8caf1746 100644
+--- a/app/utils/common/process/manager.py
++++ b/app/utils/common/process/manager.py
+@@ -629,6 +629,8 @@ class ProcessManager:
+             bool: 操作是否成功
+         """
+ 
++        if desktop_process_target.get() is not None:
++            return await self._operate_desktop_window("show_process_window")
+         hwnd = self.main_hwnd
+         if hwnd is None:
+             return False
+@@ -644,6 +646,8 @@ class ProcessManager:
+         Returns:
+             bool: 操作是否成功
+         """
++        if desktop_process_target.get() is not None:
++            return await self._operate_desktop_window("hide_process_window")
+         hwnd = self.main_hwnd
+         if hwnd is None:
+             return False
+@@ -671,6 +675,13 @@ class ProcessManager:
+         except Exception:
+             return False
+ 
++    async def maximize_window(self) -> bool:
++        """最大化当前主进程的窗口。"""
++        if desktop_process_target.get() is not None:
++            return await self._operate_desktop_window("maximize_process_window")
++        hwnd = self.main_hwnd
++        return hwnd is not None and window.maximize_window(hwnd)
++
+     async def activate_window(self) -> bool:
+         """激活主进程窗口并将其置于前台
+ 
+@@ -718,7 +729,11 @@ class ProcessManager:
+         """
+ 
+         while await self.is_running():
+-            hwnd = self.main_hwnd
+-            if hwnd is None or not window.close_window(hwnd):
+-                return
++            if desktop_process_target.get() is not None:
++                if not await self._operate_desktop_window("close_process_window"):
++                    return
++            else:
++                hwnd = self.main_hwnd
++                if hwnd is None or not window.close_window(hwnd):
++                    return
+             await asyncio.sleep(0.2)
+diff --git a/app/utils/contracts/window.py b/app/utils/contracts/window.py
+index db8073629..29dc8f965 100644
+--- a/app/utils/contracts/window.py
++++ b/app/utils/contracts/window.py
+@@ -26,6 +26,8 @@ class WindowAPI(Protocol):
+ 
+     def minimize_window(self, hwnd: int) -> bool: ...
+ 
++    def maximize_window(self, hwnd: int) -> bool: ...
++
+     def close_window(self, hwnd: int) -> bool: ...
+ 
+     def activate_window(self, hwnd: int) -> bool: ...
+diff --git a/app/utils/unsupported/window.py b/app/utils/unsupported/window.py
+index a02ae00b7..aae26ffe3 100644
+--- a/app/utils/unsupported/window.py
++++ b/app/utils/unsupported/window.py
+@@ -35,6 +35,10 @@ def minimize_window(hwnd: int) -> bool:
+     raise UnsupportedPlatformError("window")
+ 
+ 
++def maximize_window(hwnd: int) -> bool:
++    raise UnsupportedPlatformError("window")
++
++
+ def close_window(hwnd: int) -> bool:
+     raise UnsupportedPlatformError("window")
+ 
+diff --git a/app/utils/windows/desktop_session/process_worker.py b/app/utils/windows/desktop_session/process_worker.py
+index 308f991d3..08c780795 100644
+--- a/app/utils/windows/desktop_session/process_worker.py
++++ b/app/utils/windows/desktop_session/process_worker.py
+@@ -25,11 +25,20 @@ from pywintypes import error as Win32Error
+ from .launcher import connect_executor_pipe, receive, send
+ from .native import handle_scope, process_session
+ 
++WINDOW_ACTIONS = {
++    "activate_process_window": "activate_window",
++    "minimize_process_window": "minimize_window",
++    "maximize_process_window": "maximize_window",
++    "show_process_window": "show_window",
++    "hide_process_window": "hide_window",
++    "close_process_window": "close_window",
++}
++
+ 
+ def run(pipe) -> None:
+     launch = receive(pipe)
+     action = launch.get("action")
+-    if action in {"activate_process_window", "minimize_process_window"}:
++    if action in WINDOW_ACTIONS:
+         send(pipe, {"pid": os.getpid()})
+         code = run_window_action(action, launch["arguments"])
+         send(pipe, {"returnCode": code})
+@@ -90,11 +99,7 @@ def run_window_action(action: str, arguments: dict) -> int:
+         if process is not None
+         else None
+     )
+-    operation = (
+-        window.activate_window
+-        if action == "activate_process_window"
+-        else window.minimize_window
+-    )
++    operation = getattr(window, WINDOW_ACTIONS[action])
+     return int(not (hwnd and operation(hwnd)))
+ 
+ 
+diff --git a/app/utils/windows/window.py b/app/utils/windows/window.py
+index 35a8693f1..97d999f88 100644
+--- a/app/utils/windows/window.py
++++ b/app/utils/windows/window.py
+@@ -128,6 +128,11 @@ def minimize_window(hwnd: int) -> bool:
+     return True
+ 
+ 
++def maximize_window(hwnd: int) -> bool:
++    win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
++    return win32gui.GetWindowPlacement(hwnd)[1] == win32con.SW_SHOWMAXIMIZED
++
++
+ def close_window(hwnd: int) -> bool:
+     """发送 WM_CLOSE 请求窗口关闭，由应用自行走退出保存流程"""
+ 
+diff --git a/tests/platform/test_desktop_session_process_scope.py b/tests/platform/test_desktop_session_process_scope.py
+index 1c972a8e4..c43a4474a 100644
+--- a/tests/platform/test_desktop_session_process_scope.py
++++ b/tests/platform/test_desktop_session_process_scope.py
+@@ -22,6 +22,63 @@ from app.utils.common.process.runner import popen_scoped
+ from app.utils.common.process.scope import TaskProcessScope, current_process_scope
+ 
+ 
++@pytest.mark.skipif(os.name != "nt", reason="需要 Windows 分身进程执行器")
++@pytest.mark.asyncio
++async def test_window_operations_run_in_the_selected_session(monkeypatch, tmp_path):
++    from app.utils.common.process.manager import ProcessManager
++    from app.utils.windows.desktop_session import process_runner, process_worker
++
++    process = Mock(spec=psutil.Process, pid=101)
++    process.is_running.return_value = True
++    manager = ProcessManager()
++    manager.target_process = process
++    target = session.DesktopProcessTarget(7, tmp_path, tmp_path)
++
++    def close_window(_hwnd):
++        process.is_running.return_value = False
++        return True
++
++    close = Mock(side_effect=close_window)
++    show, hide, maximize = (Mock(return_value=True) for _ in range(3))
++    monkeypatch.setattr(process_worker, "process_session", lambda _: 7)
++    monkeypatch.setattr(
++        operations, "managed_process", lambda pid: process if pid == 101 else None
++    )
++    monkeypatch.setattr(
++        "app.utils.common.process.manager.get_main_window_handle",
++        lambda pid, *_: 42 if pid == 101 else None,
++    )
++    for name, operation in (
++        ("close_window", close),
++        ("show_window", show),
++        ("hide_window", hide),
++        ("maximize_window", maximize),
++    ):
++        monkeypatch.setattr(
++            f"app.utils.common.process.manager.window.{name}", operation
++        )
++
++    async def run_in_child(selected, action, arguments, *, worker_module):
++        assert selected == target
++        assert worker_module == process_worker.__name__
++        return process_worker.run_window_action(action, arguments), "", ""
++
++    monkeypatch.setattr(process_runner, "run_desktop_action", run_in_child)
++    token = session.desktop_process_target.set(target)
++    try:
++        assert await manager.show_window()
++        assert await manager.hide_window()
++        assert await manager.maximize_window()
++        await manager.close()
++        assert not await manager.is_running()
++    finally:
++        session.desktop_process_target.reset(token)
++    for operation in (show, hide, maximize, close):
++        operation.assert_called_once_with(42)
++    process.terminate.assert_not_called()
++    process.kill.assert_not_called()
++
++
+ @pytest.fixture
+ def desktop_session_native(monkeypatch):
+     """在 Windows 系统调用边界模拟子会话状态。"""
+-- 
+2.47.1.windows.2
+

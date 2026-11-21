@@ -1,0 +1,119 @@
+From 2eaa4c1e64231a98714b6dc35f5e7d7f067e88b0 Mon Sep 17 00:00:00 2001
+From: luo-luo-o <luo_luo_o@outlook.com>
+Date: Sat, 21 Nov 2026 02:48:01 +0800
+Subject: [PATCH 5/8] =?utf-8?q?fix(ci):=20=E4=BF=AE=E5=A4=8D=E6=A1=8C?=
+ =?utf-8?q?=E9=9D=A2=E5=88=86=E8=BA=AB=E5=9B=9E=E5=BD=92=E4=B8=8E=E8=AF=8D?=
+ =?utf-8?q?=E8=A1=A8=E5=AE=A1=E8=AE=A1?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+---
+ .../Script/components/HSRRunConfigSection.vue |  2 +-
+ .../test_desktop_session_process_scope.py     | 23 +++++++++++++------
+ 2 files changed, 17 insertions(+), 8 deletions(-)
+
+diff --git a/frontend/src/views/EditView/Script/components/HSRRunConfigSection.vue b/frontend/src/views/EditView/Script/components/HSRRunConfigSection.vue
+index 937010d90..cda725461 100644
+--- a/frontend/src/views/EditView/Script/components/HSRRunConfigSection.vue
++++ b/frontend/src/views/EditView/Script/components/HSRRunConfigSection.vue
+@@ -22,7 +22,7 @@ const { t } = useI18n()
+ <template>
+   <div class="form-section">
+     <div class="section-header">
+-      <h3>{{ t('core.edit.runConfiguration') }}</h3>
++      <h3>{{ t('core.edit.runLimits') }}</h3>
+     </div>
+     <ScriptExecutionSessionField />
+     <a-row :gutter="16">
+diff --git a/tests/platform/test_desktop_session_process_scope.py b/tests/platform/test_desktop_session_process_scope.py
+index 4b01c213e..1c972a8e4 100644
+--- a/tests/platform/test_desktop_session_process_scope.py
++++ b/tests/platform/test_desktop_session_process_scope.py
+@@ -4,6 +4,7 @@ import asyncio
+ import os
+ import sys
+ from pathlib import Path
++from types import ModuleType
+ from unittest.mock import AsyncMock, Mock
+ from uuid import UUID, uuid4
+ 
+@@ -21,6 +22,17 @@ from app.utils.common.process.runner import popen_scoped
+ from app.utils.common.process.scope import TaskProcessScope, current_process_scope
+ 
+ 
++@pytest.fixture
++def desktop_session_native(monkeypatch):
++    """在 Windows 系统调用边界模拟子会话状态。"""
++    name = "app.utils.windows.desktop_session.native"
++    native = ModuleType(name)
++    native.child_session = Mock(return_value=None)
++    native.session_state = Mock(return_value=0)
++    monkeypatch.setitem(sys.modules, name, native)
++    return native
++
++
+ def test_desktop_session_keeps_builtin_support_when_whimbox_is_a_plugin():
+     from whimbox_adapter.config import WhimboxConfig
+ 
+@@ -59,6 +71,7 @@ async def test_desktop_task_can_run_local_update_helper_without_adopting_local_p
+ @pytest.mark.asyncio
+ async def test_dispatch_preflight_classifies_builtin_and_plugin_tasks_before_connecting(
+     monkeypatch,
++    desktop_session_native,
+ ):
+     from maa_adapter.config.script import MaaConfig
+     from src_adapter.config import SrcConfig
+@@ -70,7 +83,6 @@ async def test_dispatch_preflight_classifies_builtin_and_plugin_tasks_before_con
+         M9AConfig,
+         OkwwConfig,
+     )
+-    from app.utils.windows.desktop_session import native
+ 
+     entries = {
+         uuid4(): entry
+@@ -87,8 +99,7 @@ async def test_dispatch_preflight_classifies_builtin_and_plugin_tasks_before_con
+     monkeypatch.setattr(
+         Plugin, "script_classes", lambda: {"MAA": MaaConfig, "SRC": SrcConfig}
+     )
+-    current_session = Mock(return_value=None)
+-    monkeypatch.setattr(native, "child_session", current_session)
++    current_session = desktop_session_native.child_session
+     dispatch_scopes = []
+ 
+     async def start(_mode, tasks, *, use_configured_session):
+@@ -109,7 +120,6 @@ async def test_dispatch_preflight_classifies_builtin_and_plugin_tasks_before_con
+ 
+     main = {uid for uid, result in zip(entries, results, strict=True) if result["code"]}
+     current_session.return_value = 7
+-    monkeypatch.setattr(native, "session_state", lambda _: 0)
+     service.scope_state = (7, False)
+     admitted = await service.dispatch_queues(
+         list(entries), preview_only=False, main_session_queue_ids=main
+@@ -124,12 +134,12 @@ async def test_dispatch_preflight_classifies_builtin_and_plugin_tasks_before_con
+ @pytest.mark.asyncio
+ async def test_single_script_default_uses_connected_session_and_respects_close(
+     monkeypatch,
++    desktop_session_native,
+ ):
+     from app.api.dispatch import TaskCreateIn, add_task
+     from app.core import Config, Plugin, TaskManager
+     from app.core.notify.commands import execute_notification_command
+     from app.models.config import GeneralConfig
+-    from app.utils.windows.desktop_session import native
+ 
+     desktop_id, legacy_id, queue_id = (uuid4() for _ in range(3))
+     desktop = GeneralConfig.build(
+@@ -145,8 +155,7 @@ async def test_single_script_default_uses_connected_session_and_respects_close(
+     services = ServiceRegistry()
+     services.register("desktop_session.launcher", lambda: None, owner="desktop_session")
+     monkeypatch.setattr(Plugin, "services", services)
+-    monkeypatch.setattr(native, "child_session", lambda: 7)
+-    monkeypatch.setattr(native, "session_state", lambda _: 0)
++    desktop_session_native.child_session.return_value = 7
+     service = type(lifecycle.DesktopSessionLifecycle)()
+     monkeypatch.setattr(lifecycle, "DesktopSessionLifecycle", service)
+     starts = []
+-- 
+2.47.1.windows.2
+

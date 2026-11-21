@@ -1,0 +1,231 @@
+From 45ac1c450e3c206a5caa69ef8ae4fd85ebeb18e5 Mon Sep 17 00:00:00 2001
+From: luo-luo-o <luo_luo_o@outlook.com>
+Date: Sat, 21 Nov 2026 03:14:56 +0800
+Subject: [PATCH] =?utf-8?q?feat(win-process):=20=E6=8C=89=20Windows=20?=
+ =?utf-8?q?=E4=BC=9A=E8=AF=9D=E9=9A=94=E7=A6=BB=E8=BF=9B=E7=A8=8B=E8=B7=9F?=
+ =?utf-8?q?=E8=B8=AA?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+---
+ README.md                          |  1 +
+ pyproject.toml                     |  2 +-
+ src/win_process_adapter/control.py | 29 ++++++++++---
+ src/win_process_adapter/plugin.py  | 14 ++++++-
+ tests/test_process_scope.py        | 65 ++++++++++++++++++++++++++++++
+ 5 files changed, 104 insertions(+), 7 deletions(-)
+ create mode 100644 tests/test_process_scope.py
+
+diff --git a/README.md b/README.md
+index ba7a2a6..c7a29d9 100644
+--- a/README.md
++++ b/README.md
+@@ -38,6 +38,7 @@
+ 发行包为 `auto-mas-win-process-adapter`，插件 ID 为 `win_process_adapter`。
+ 适用于 Python 3.12 和已接入游戏适配插件的 AUTO-MAS 宿主，要求 `auto-mas-core>=5.9.0b1,<6`。
+ 通过插件市场安装时由宿主提供 core，独立安装时需要提供兼容的 SDK wheel。
++支持会话范围的宿主可通过 `win_process.desktop_scope` 确认适配已具备子会话进程跟踪能力。
+ 
+ 首次发布前，在 [PyPI 账户的 Publishing 页面](https://pypi.org/manage/account/publishing/) 登记待定发布者。
+ 项目名填 `auto-mas-win-process-adapter`，仓库所有者填 `AUTO-MAS-Project`，仓库名填 `AUTO-MAS-Win-Process-Adapter`，工作流文件名填 `publish.yml`，环境名填 `pypi`。
+diff --git a/pyproject.toml b/pyproject.toml
+index e2ab2a5..6ae4d47 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "auto-mas-win-process-adapter"
+-version = "0.1.0"
++version = "0.1.1"
+ description = "Windows game process adapter"
+ readme = { file = "README.md", content-type = "text/markdown" }
+ requires-python = ">=3.12,<3.13"
+diff --git a/src/win_process_adapter/control.py b/src/win_process_adapter/control.py
+index e9c72ea..b488d68 100644
+--- a/src/win_process_adapter/control.py
++++ b/src/win_process_adapter/control.py
+@@ -12,7 +12,7 @@ from uuid import UUID, uuid5
+ 
+ import psutil
+ from auto_mas_core import ClientControl, DeviceStatus, DeviceSubscribeError, LockTicket
+-from auto_mas_core.utils import ProcessInfo, ProcessManager, file_lock
++from auto_mas_core.utils import ProcessInfo, ProcessManager, file_lock, process
+ 
+ from .schema import WinProcessDevice, WinProcessGame
+ 
+@@ -24,10 +24,19 @@ class WinProcessControl(ClientControl[WinProcessGame, WinProcessDevice]):
+ 
+     def __init__(self, config: WinProcessGame | None = None) -> None:
+         super().__init__(config=config)
+-        self._process = ProcessManager()
++        self._processes: dict[int | None, ProcessManager] = {}
+         self._operation = asyncio.Lock()
+         self._resource_file: BinaryIO | None = None
+ 
++    @property
++    def _process(self) -> ProcessManager:
++        # 支持尚未提供桌面分身会话接口的 SDK。
++        scope = getattr(process, "desktop_process_session_id", None)
++        session_id = scope() if scope is not None else None
++        if session_id not in self._processes:
++            self._processes[session_id] = ProcessManager()
++        return self._processes[session_id]
++
+     @property
+     def busy(self) -> bool:
+         return self._operation.locked()
+@@ -58,9 +67,10 @@ class WinProcessControl(ClientControl[WinProcessGame, WinProcessDevice]):
+             path = os.path.normcase(str(entry.executable.resolve()))
+ 
+             def matching_pids() -> list[int]:
++                scan = getattr(process, "iter_processes", psutil.process_iter)
+                 return [
+                     proc.pid
+-                    for proc in psutil.process_iter(["exe"])
++                    for proc in scan(["exe"])
+                     if proc.info["exe"]
+                     and os.path.normcase(str(Path(proc.info["exe"]).resolve())) == path
+                 ]
+@@ -243,7 +253,14 @@ class WinProcessControl(ClientControl[WinProcessGame, WinProcessDevice]):
+         self._check_device(device_uid, ticket)
+         async with self.operation_scope(self._operation):
+             await self._refresh()
+-            hwnd = self._process.main_hwnd
++            manager = self._process
++            maximize = getattr(manager, "maximize_window", None)
++            if maximize is not None:
++                if not await maximize():
++                    raise RuntimeError("游戏窗口不可用或最大化失败")
++                return
++            # 旧 SDK 只支持通过主会话的窗口句柄操作。
++            hwnd = manager.main_hwnd
+             if hwnd is None:
+                 raise RuntimeError("游戏窗口不可用")
+             import win32con
+@@ -256,7 +273,9 @@ class WinProcessControl(ClientControl[WinProcessGame, WinProcessDevice]):
+     async def teardown(self) -> None:
+         """解除进程观察，显式关闭由设备操作入口负责。"""
+         async with self.operation_scope(self._operation):
+-            await self._process.clear()
++            for manager in self._processes.values():
++                await manager.clear()
++            self._processes.clear()
+ 
+ 
+ async def search_installed() -> list[WinProcessGame]:
+diff --git a/src/win_process_adapter/plugin.py b/src/win_process_adapter/plugin.py
+index d943789..e1d11c6 100644
+--- a/src/win_process_adapter/plugin.py
++++ b/src/win_process_adapter/plugin.py
+@@ -3,8 +3,10 @@
+ from __future__ import annotations
+ 
+ import sys
++from typing import ClassVar
+ 
+-from auto_mas_core import GameAdapterPlugin, GameTypeDecl
++from auto_mas_core import GameAdapterPlugin, GameTypeDecl, PluginPrecheckError
++from auto_mas_core.utils import ProcessManager, process
+ 
+ from .control import WinProcessControl, search_installed
+ from .schema import WinProcessDevice, WinProcessGame
+@@ -14,6 +16,9 @@ class Plugin(GameAdapterPlugin):
+     """登记通用进程游戏配置类。展示名在包内 i18n。"""
+ 
+     game_type_key = "win_process"
++    provides_services: ClassVar[dict[str, str]] = {
++        "win_process.desktop_scope": "check_desktop_scope"
++    }
+     decl = GameTypeDecl(
+         game_class=WinProcessGame,
+         device_class=WinProcessDevice,
+@@ -21,6 +26,13 @@ class Plugin(GameAdapterPlugin):
+         search=search_installed,
+     )
+ 
++    def check_desktop_scope(self) -> None:
++        if not callable(getattr(ProcessManager, "maximize_window", None)) or not all(
++            callable(getattr(process, name, None))
++            for name in ("desktop_process_session_id", "iter_processes")
++        ):
++            raise PluginPrecheckError("当前宿主未提供桌面分身进程范围接口")
++
+     async def pre_enable(self) -> None:
+         if sys.platform != "win32":
+             raise RuntimeError("Windows 通用进程适配仅支持 Windows")
+diff --git a/tests/test_process_scope.py b/tests/test_process_scope.py
+new file mode 100644
+index 0000000..6553b0e
+--- /dev/null
++++ b/tests/test_process_scope.py
+@@ -0,0 +1,65 @@
++from pathlib import Path
++from unittest.mock import Mock
++from uuid import uuid4
++
++import psutil
++import pytest
++from app.models.config.game import TRIGGER_TICKET
++from app.utils.common.process import operations, session
++from auto_mas_core import DeviceStatus
++
++from win_process_adapter.control import WinProcessControl
++from win_process_adapter.schema import WinProcessGame
++
++
++@pytest.mark.asyncio
++async def test_refresh_tracks_the_same_executable_independently_in_each_session(
++    monkeypatch, tmp_path
++):
++    executable = tmp_path / "game.exe"
++    executable.touch()
++    entry = WinProcessGame.build(
++        uid=uuid4(), payload={"info": {"path": str(executable)}}
++    )
++    await entry.activate()
++    control = WinProcessControl(entry)
++    processes = []
++    for pid in (101, 102):
++        candidate = Mock(spec=psutil.Process)
++        candidate.pid = pid
++        candidate.info = {
++            "pid": pid,
++            "exe": str(executable),
++            "name": executable.name,
++            "create_time": 1.0,
++        }
++        candidate.exe.return_value = str(executable)
++        candidate.is_running.return_value = True
++        processes.append(candidate)
++
++    monkeypatch.setattr(psutil, "process_iter", lambda _: iter(processes))
++    monkeypatch.setattr(
++        operations, "matches_session", lambda pid, scope: pid - 100 == scope
++    )
++    monkeypatch.setattr(
++        session, "matches_session", lambda pid, scope: pid - 100 == scope
++    )
++    monkeypatch.setattr(session, "_parent_scope", lambda: 1)
++
++    def tracked_pid() -> int | None:
++        device = next(iter(entry.devices.values()))
++        assert device.info.status == DeviceStatus.ONLINE
++        return control.checked_process(device.uid, ticket=TRIGGER_TICKET).main_pid
++
++    await control.refresh()
++    assert tracked_pid() == 101
++    target = session.DesktopProcessTarget(2, Path.cwd(), tmp_path)
++    token = session.desktop_process_target.set(target)
++    try:
++        await control.refresh()
++        assert tracked_pid() == 102
++    finally:
++        session.desktop_process_target.reset(token)
++    await control.refresh()
++    assert tracked_pid() == 101
++    await control.teardown()
+-- 
+2.47.1.windows.2
+

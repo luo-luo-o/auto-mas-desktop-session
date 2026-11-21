@@ -1,0 +1,48 @@
+From 753007b08b16c97cf2b8804eabb0c8f4d52ed1af Mon Sep 17 00:00:00 2001
+From: luo-luo-o <luo_luo_o@outlook.com>
+Date: Sat, 21 Nov 2026 01:59:09 +0800
+Subject: [PATCH 4/8] =?utf-8?q?test(desktop-session):=20=E4=BD=BF=E7=94=A8?=
+ =?utf-8?q?=E5=B7=B2=E6=8F=92=E4=BB=B6=E5=8C=96=E7=9A=84=20SRC=20=E9=85=8D?=
+ =?utf-8?q?=E7=BD=AE=E9=AA=8C=E8=AF=81=E6=B4=BE=E5=8F=91?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+---
+ tests/platform/test_desktop_session_process_scope.py | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/tests/platform/test_desktop_session_process_scope.py b/tests/platform/test_desktop_session_process_scope.py
+index 33e21a6df..4b01c213e 100644
+--- a/tests/platform/test_desktop_session_process_scope.py
++++ b/tests/platform/test_desktop_session_process_scope.py
+@@ -61,6 +61,7 @@ async def test_dispatch_preflight_classifies_builtin_and_plugin_tasks_before_con
+     monkeypatch,
+ ):
+     from maa_adapter.config.script import MaaConfig
++    from src_adapter.config import SrcConfig
+ 
+     from app.core import Config, Plugin, TaskManager
+     from app.models.config import (
+@@ -68,7 +69,6 @@ async def test_dispatch_preflight_classifies_builtin_and_plugin_tasks_before_con
+         HSRConfig,
+         M9AConfig,
+         OkwwConfig,
+-        SrcConfig,
+     )
+     from app.utils.windows.desktop_session import native
+ 
+@@ -84,7 +84,9 @@ async def test_dispatch_preflight_classifies_builtin_and_plugin_tasks_before_con
+         )
+     }
+     monkeypatch.setattr(Config, "ScriptConfig", entries)
+-    monkeypatch.setattr(Plugin, "script_classes", lambda: {"MAA": MaaConfig})
++    monkeypatch.setattr(
++        Plugin, "script_classes", lambda: {"MAA": MaaConfig, "SRC": SrcConfig}
++    )
+     current_session = Mock(return_value=None)
+     monkeypatch.setattr(native, "child_session", current_session)
+     dispatch_scopes = []
+-- 
+2.47.1.windows.2
+
